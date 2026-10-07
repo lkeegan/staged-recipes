@@ -1,0 +1,151 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 72dae2f..4552542 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -18,6 +18,8 @@ else()
+     PROJECT(SEVN VERSION "${SEVN_VERSION_STRING}" LANGUAGES CXX)
+ endif()
+ 
++include(GNUInstallDirs)
++
+ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+ endif()
+@@ -139,7 +141,9 @@ endif()
+ #@TODO there is a missing case, i.e. when it is a git repo but It has not a remote (i.e. a new local branch)
+ #in this case we will have problems in compiling because the sevn.h variable will be not set
+ 
++set(SEVN_DATA_DIR "${CMAKE_INSTALL_FULL_DATADIR}/sevn")
+ configure_file("include/sevn_version.h.in" "${PROJECT_BINARY_DIR}/sevn_version.h")
++configure_file("include/sevn_config.h.in" "${PROJECT_BINARY_DIR}/sevn_config.h" @ONLY)
+ 
+ 
+ #OPTIONS AND SETS
+@@ -217,6 +221,9 @@ if(python)
+     add_subdirectory(SEVNpy)
+ endif(python)
+ 
++install(DIRECTORY tables auxiliary_data
++        DESTINATION "${CMAKE_INSTALL_DATADIR}/sevn")
++
+ if(test)
+     message("-- Units test compilation enabled")
+     add_subdirectory(extern/catch)
+diff --git a/include/sevn_config.h.in b/include/sevn_config.h.in
+new file mode 100644
+index 0000000..11fae6b
+--- /dev/null
++++ b/include/sevn_config.h.in
+@@ -0,0 +1,6 @@
++#ifndef SEVN_CONFIG_H
++#define SEVN_CONFIG_H
++
++#define SEVN_DATA_DIR "@SEVN_DATA_DIR@"
++
++#endif
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 4a03eae..7f9f749 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -25,7 +25,9 @@ endif()
+ 
+ 
+ file(GLOB_RECURSE SEVN_HEADER "${PROJECT_SOURCE_DIR}/include/*h" "${PROJECT_SOURCE_DIR}/src/*h")
+-list(APPEND SEVN_HEADER "${PROJECT_BINARY_DIR}/sevn_version.h")
++list(APPEND SEVN_HEADER
++        "${PROJECT_BINARY_DIR}/sevn_config.h"
++        "${PROJECT_BINARY_DIR}/sevn_version.h")
+ 
+ include(GNUInstallDirs)
+ 
+@@ -104,12 +106,15 @@ endif(staticlib)
+ if(sharedlib)
+     add_library(sevn_lib_shared SHARED ${SEVN_BASE})
+     sevn_configure_library(sevn_lib_shared)
++    set_target_properties(sevn_lib_shared PROPERTIES
++            VERSION "${PROJECT_VERSION}"
++            SOVERSION "${PROJECT_VERSION_MAJOR}")
+     if(APPLE)
+         set_target_properties(sevn_lib_shared PROPERTIES MACOSX_RPATH ON)
+     endif()
+     install(TARGETS sevn_lib_shared
+             EXPORT SEVNlibs
+-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/sevn
++            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+             INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/sevn
+             PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/sevn)
+@@ -138,7 +143,7 @@ add_library(SEVN::sevn ALIAS ${SEVNLIBL})
+ 
+ #Cmake Package staff
+ set(INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR}/sevn)
+-set(LIB_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/sevn)
++set(LIB_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR})
+ 
+ #Libraries Cmake
+ install(
+@@ -173,8 +178,8 @@ install(FILES
+ #Define a bashscript that sets the SEVN env variables
+ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/sevnenv.sh
+         "#!/usr/bin/env bash
+-export SEVNFLAGS=\"-I${CMAKE_INSTALL_FULL_INCLUDEDIR}/sevn -L${CMAKE_INSTALL_FULL_LIBDIR}/sevn -l${SEVNLIBL}\"
+-export SEVNDIR=\"${PROJECT_SOURCE_DIR}\"
++export SEVNFLAGS=\"-I${CMAKE_INSTALL_FULL_INCLUDEDIR}/sevn -L${CMAKE_INSTALL_FULL_LIBDIR} -l${SEVNLIBL}\"
++export SEVNDIR=\"${SEVN_DATA_DIR}\"
+ export SEVNCXX=\"${CMAKE_CXX_COMPILER}\"
+ alias sevncxx=\"${CMAKE_CXX_COMPILER}\"
+         ")
+diff --git a/src/SEVNConfig.cmake.in b/src/SEVNConfig.cmake.in
+index 7e04c95..3786765 100644
+--- a/src/SEVNConfig.cmake.in
++++ b/src/SEVNConfig.cmake.in
+@@ -3,6 +3,7 @@
+ include(CMakeFindDependencyMacro)
+ find_dependency(fmt)
+ find_dependency(spdlog)
++find_dependency(FastFloat CONFIG)
+ if(@OpenMP_CXX_FOUND@)
+     find_dependency(OpenMP)
+ endif()
+diff --git a/src/general/utils/utilities.h b/src/general/utils/utilities.h
+index 829c49b..fde7b9d 100644
+--- a/src/general/utils/utilities.h
++++ b/src/general/utils/utilities.h
+@@ -19,6 +19,9 @@
+ #include <memory>
+ #include <limits>
+ #include <map>
++#include <cstdlib>
++
++#include <sevn_config.h>
+ #include <type_traits>
+ #include <cctype>
+ #include <system_error>
+@@ -627,20 +630,15 @@ namespace utilities{
+    * @return The absolute SEVN path
+    */
+   inline std::string get_absolute_SEVN_path(){
+-        std::string here_token = "include/";
+-        std::string sevn_path = __FILE__;
+-        std::size_t found = sevn_path.rfind("/src/");
+-
++        const char* configured_path = std::getenv("SEVNDIR");
++        if (configured_path != nullptr)
++            return configured_path;
+ 
+-        static sevnstd::SevnLogging svlog;
+-        if (found!=std::string::npos){
+-            sevn_path = sevn_path.substr(0,found);
+-        }
+-        else{
+-            SVLOG_CRITICAL_AS(sevnstd::sevnio_error, "Error in the initialisation of parameter myself (path of the SEVN folder). The path finding it is based on the fact that the utilities.h file is inside the folder include in the main SEVN folder. Did you change it?");
+-        }
++        const char* conda_prefix = std::getenv("CONDA_PREFIX");
++        if (conda_prefix != nullptr)
++            return std::string(conda_prefix) + "/share/sevn";
+ 
+-        return sevn_path;
++        return SEVN_DATA_DIR;
+   }
+ 
+   /**

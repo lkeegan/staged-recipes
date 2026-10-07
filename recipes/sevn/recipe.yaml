@@ -1,0 +1,76 @@
+context:
+  version: "2.18.0"
+  commit: 47b6738602fd889b384ebfb9da6e9c43cae7fcaf
+
+package:
+  name: sevn
+  version: ${{ version }}
+
+source:
+  # Replace this snapshot with the official sevncodes v2.18.0 tag archive before submission.
+  url: https://gitlab.com/lkeegan1/sevn/-/archive/${{ commit }}/sevn-${{ commit }}.tar.gz
+  sha256: eefb201aae7163f7d986dcf3cfdc4d519f871b493557614b8e918bda1fe09878
+  patches:
+    - install.patch
+
+build:
+  number: 0
+  skip: win
+  script: build.sh
+
+requirements:
+  build:
+    - ${{ compiler('cxx') }}
+    - ${{ stdlib('c') }}
+    - cmake
+    - ninja
+  host:
+    - fast_float
+    - fmt
+    - if: linux
+      then: libgomp
+      else: llvm-openmp
+    - spdlog
+  run:
+    - fast_float
+  run_exports:
+    - ${{ pin_subpackage('sevn', upper_bound='3') }}
+
+tests:
+  - script:
+      - sevn.x | grep "SEVN VERSION:${{ version }}"
+      - sevnB.x | grep "SEVN VERSION:${{ version }}"
+      - test -d "${PREFIX}/share/sevn/tables/SEVNtracks_parsec_ov05_AGB"
+      - test -f "${PREFIX}/share/sevn/auxiliary_data/deathmatrix_Woosley+20.dat"
+      - cmake-package-check SEVN --targets SEVNLIBS::sevn_lib_shared
+      - cmake -G Ninja -S test -B test-build -DCMAKE_BUILD_TYPE=Release
+      - cmake --build test-build
+      - test-build/sevn-link-test
+      - sevn.x -list test/listStar.dat -tf 0.01 -dtout 0.01 -o test-output -log_level error > /dev/null
+      - test -f test-output/output_0.csv
+    files:
+      recipe:
+        - test
+    requirements:
+      run:
+        - cmake-package-check
+        - cmake
+        - ninja
+        - ${{ compiler('cxx') }}
+
+about:
+  homepage: https://gitlab.com/sevncodes/sevn
+  summary: Stellar EVolution N-body code
+  description: |
+    SEVN is a rapid binary population synthesis code that models the evolution
+    of isolated binary systems, including stellar winds, mass transfer,
+    common-envelope evolution, stellar collisions, tides, and compact-object
+    formation.
+  license: MIT
+  license_file: LICENSE
+  documentation: https://sevn.readthedocs.io/
+  repository: https://gitlab.com/sevncodes/sevn
+
+extra:
+  recipe-maintainers:
+    - lkeegan
